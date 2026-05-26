@@ -380,7 +380,6 @@ import pytz
 import streamlit as st
 import numpy as np
 from sentence_transformers import SentenceTransformer, util
-import streamlit.components.v1 as components
 
 # =====================================================
 # CONFIG
@@ -393,25 +392,17 @@ REFRESH_SECONDS = 200
 POLAND_TZ = pytz.timezone("Europe/Warsaw")
 
 # =====================================================
-# STREAMLIT
+# STREAMLIT CONFIG
 # =====================================================
 
 st.set_page_config(page_title="AskReddit Monitor", layout="wide")
 
 # =====================================================
-# AUTO REFRESH (ROBUST FIX)
+# SESSION STATE (IMPORTANT FIX)
 # =====================================================
 
-components.html(
-    f"""
-    <script>
-        setTimeout(function(){{
-            window.location.reload();
-        }}, {REFRESH_SECONDS * 1000});
-    </script>
-    """,
-    height=0
-)
+if "last_refresh" not in st.session_state:
+    st.session_state.last_refresh = time.time()
 
 # =====================================================
 # MODEL
@@ -492,7 +483,7 @@ def save_post(post_id, title, url, posted_time, score, reason, category):
     conn.commit()
 
 # =====================================================
-# SCORING
+# SCORING (RULE BASED)
 # =====================================================
 
 def score_title(title):
@@ -517,7 +508,7 @@ def score_title(title):
     return max(1, min(100, score))
 
 # =====================================================
-# CATEGORY
+# CATEGORY DETECTION
 # =====================================================
 
 def get_category(title):
@@ -571,7 +562,7 @@ def analyze_titles(titles):
     return results
 
 # =====================================================
-# FETCH
+# FETCH POSTS
 # =====================================================
 
 def fetch_posts():
@@ -616,12 +607,21 @@ def fetch_posts():
             )
 
 # =====================================================
-# INIT
+# INIT DB
 # =====================================================
 
 cursor.execute("SELECT COUNT(*) FROM posts")
 if cursor.fetchone()[0] == 0:
     fetch_posts()
+
+# =====================================================
+# AUTO REFRESH LOGIC
+# =====================================================
+
+if time.time() - st.session_state.last_refresh > REFRESH_SECONDS:
+    fetch_posts()
+    st.session_state.last_refresh = time.time()
+    st.rerun()
 
 # =====================================================
 # LOAD DATA
@@ -634,23 +634,51 @@ FROM posts
 ORDER BY datetime(fetched_at) DESC
 """, conn)
 
-df.columns = ["Title","Reddit Link","Posted","Score","Reason","Category","Fetched At"]
+df.columns = [
+    "Title","Reddit Link","Posted",
+    "Score","Reason","Category","Fetched At"
+]
 
 df["Posted"] = df["Posted"].apply(format_poland_time)
 df["Fetched At"] = df["Fetched At"].apply(format_poland_time)
 
 # =====================================================
-# UI
+# UI HEADER
 # =====================================================
 
 st.title("🔥 AskReddit Engagement Monitor")
 
-st.subheader("📋 Latest Posts")
+last_ref = datetime.fromtimestamp(
+    st.session_state.last_refresh
+).astimezone(POLAND_TZ).strftime("%d/%m/%Y %H:%M:%S")
+
+st.markdown(f"""
+### ⏱ Last refreshed: **{last_ref}**
+""")
+
+# =====================================================
+# MANUAL REFRESH BUTTON
+# =====================================================
+
+if st.button("🔄 Refresh Now"):
+    fetch_posts()
+    st.session_state.last_refresh = time.time()
+    st.rerun()
+
+# =====================================================
+# TABLES
+# =====================================================
+
+st.subheader("📋 Latest Posts (Newest First)")
 st.dataframe(df, use_container_width=True)
 
 st.subheader("🚀 Top Posts")
 st.dataframe(df.sort_values("Score", ascending=False).head(10),
              use_container_width=True)
+
+# =====================================================
+# STATS
+# =====================================================
 
 st.subheader("📊 Stats")
 
@@ -666,5 +694,9 @@ with c2:
 with c3:
     st.metric("Max Score",
               df["Score"].max() if len(df) else 0)
+
+# =====================================================
+# FOOTER
+# =====================================================
 
 st.caption("Auto-refresh every 200 seconds | Reddit AskReddit RSS")
