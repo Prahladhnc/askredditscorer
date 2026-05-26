@@ -267,30 +267,19 @@ if cursor.fetchone()[0] == 0:
 # AUTO REFRESH (STREAMLIT SAFE)
 # =====================================================
 
-# =====================================================
-# AUTO REFRESH (FIXED)
-# =====================================================
+import streamlit.components.v1 as components
 
-if "last_refresh" not in st.session_state:
-    st.session_state.last_refresh = time.time()
-
-placeholder = st.empty()
-
-# compute time since last refresh
-elapsed = time.time() - st.session_state.last_refresh
-
-if elapsed > REFRESH_SECONDS:
-    with placeholder:
-        st.info("🔄 Auto refreshing feed...")
-
-    fetch_posts()
-    st.session_state.last_refresh = time.time()
-
-    st.rerun()
-else:
-    remaining = REFRESH_SECONDS - int(elapsed)
-
-    st.info(f"⏳ Next auto-refresh in {remaining} seconds")
+# AUTO REFRESH PAGE EVERY 200 SECONDS
+components.html(
+    f"""
+    <script>
+        setTimeout(() => {{
+            window.location.reload();
+        }}, {REFRESH_SECONDS * 1000});
+    </script>
+    """,
+    height=0
+)
 
 # =====================================================
 # LOAD DATA (ALWAYS FRESH)
