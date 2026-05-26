@@ -5,3 +5,4 @@ pytz
 numpy
 scikit-learn
 sentence-transformers
+streamlit-autorefresh

@@ -373,7 +373,7 @@
 import time
 import sqlite3
 from datetime import datetime
-
+from streamlit_autorefresh import st_autorefresh
 import feedparser
 import pandas as pd
 import pytz
@@ -645,6 +645,7 @@ df["Fetched At"] = df["Fetched At"].apply(format_poland_time)
 # =====================================================
 # UI HEADER
 # =====================================================
+st_autorefresh(interval=REFRESH_SECONDS * 1000, key="auto_refresh")
 
 st.title("🔥 AskReddit Engagement Monitor")
 
