@@ -267,14 +267,30 @@ if cursor.fetchone()[0] == 0:
 # AUTO REFRESH (STREAMLIT SAFE)
 # =====================================================
 
+# =====================================================
+# AUTO REFRESH (FIXED)
+# =====================================================
+
 if "last_refresh" not in st.session_state:
     st.session_state.last_refresh = time.time()
 
-# Auto refresh every 5 minutes
-if time.time() - st.session_state.last_refresh > REFRESH_SECONDS:
+placeholder = st.empty()
+
+# compute time since last refresh
+elapsed = time.time() - st.session_state.last_refresh
+
+if elapsed > REFRESH_SECONDS:
+    with placeholder:
+        st.info("🔄 Auto refreshing feed...")
+
     fetch_posts()
     st.session_state.last_refresh = time.time()
+
     st.rerun()
+else:
+    remaining = REFRESH_SECONDS - int(elapsed)
+
+    st.info(f"⏳ Next auto-refresh in {remaining} seconds")
 
 # =====================================================
 # LOAD DATA (ALWAYS FRESH)
