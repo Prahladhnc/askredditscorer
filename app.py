@@ -373,13 +373,14 @@
 import time
 import sqlite3
 from datetime import datetime
-from streamlit_autorefresh import st_autorefresh
+
 import feedparser
 import pandas as pd
 import pytz
 import streamlit as st
 import numpy as np
 from sentence_transformers import SentenceTransformer, util
+from streamlit_autorefresh import st_autorefresh
 
 # =====================================================
 # CONFIG
@@ -398,11 +399,17 @@ POLAND_TZ = pytz.timezone("Europe/Warsaw")
 st.set_page_config(page_title="AskReddit Monitor", layout="wide")
 
 # =====================================================
-# SESSION STATE (IMPORTANT FIX)
+# AUTO REFRESH TRIGGER (IMPORTANT)
+# =====================================================
+
+st_autorefresh(interval=REFRESH_SECONDS * 1000, key="auto_refresh")
+
+# =====================================================
+# SESSION STATE
 # =====================================================
 
 if "last_refresh" not in st.session_state:
-    st.session_state.last_refresh = time.time()
+    st.session_state.last_refresh = 0
 
 # =====================================================
 # MODEL
@@ -483,7 +490,7 @@ def save_post(post_id, title, url, posted_time, score, reason, category):
     conn.commit()
 
 # =====================================================
-# SCORING (RULE BASED)
+# SCORING
 # =====================================================
 
 def score_title(title):
@@ -514,9 +521,7 @@ def score_title(title):
 def get_category(title):
     emb = model.encode(title, convert_to_tensor=True)
     sims = util.cos_sim(emb, category_embeddings)[0]
-
-    idx = int(np.argmax(sims))
-    return CATEGORIES[idx]
+    return CATEGORIES[int(np.argmax(sims))]
 
 # =====================================================
 # ANALYSIS
@@ -526,38 +531,23 @@ def analyze_titles(titles):
     results = []
 
     for t in titles:
-        try:
-            cat = get_category(t)
-            sc = score_title(t)
+        cat = get_category(t)
+        sc = score_title(t)
 
-            reasons = []
-            text = t.lower()
+        reasons = []
+        text = t.lower()
 
-            hooks = ["would you","what if","have you ever","imagine"]
-            emotions = ["worst","craziest","secret","regret","trauma"]
+        if any(x in text for x in ["would you","what if","have you ever"]):
+            reasons.append("hook")
 
-            if any(h in text for h in hooks):
-                reasons.append("hypothetical hook")
+        if any(x in text for x in ["worst","craziest","secret","regret"]):
+            reasons.append("emotion")
 
-            if any(e in text for e in emotions):
-                reasons.append("emotional trigger")
-
-            wc = len(t.split())
-            if 8 <= wc <= 20:
-                reasons.append("ideal length")
-
-            results.append({
-                "score": sc,
-                "category": cat,
-                "reason": ", ".join(reasons) if reasons else "neutral"
-            })
-
-        except:
-            results.append({
-                "score": 50,
-                "category": "General Discussion",
-                "reason": "fallback"
-            })
+        results.append({
+            "score": sc,
+            "category": cat,
+            "reason": ", ".join(reasons) if reasons else "neutral"
+        })
 
     return results
 
@@ -585,7 +575,7 @@ def fetch_posts():
                 "time": e.published
             })
         except:
-            pass
+            continue
 
     BATCH = 5
 
@@ -607,7 +597,7 @@ def fetch_posts():
             )
 
 # =====================================================
-# INIT DB
+# INIT FETCH
 # =====================================================
 
 cursor.execute("SELECT COUNT(*) FROM posts")
@@ -615,13 +605,8 @@ if cursor.fetchone()[0] == 0:
     fetch_posts()
 
 # =====================================================
-# AUTO REFRESH LOGIC
+# AUTO FETCH TRIGGER (IMPORTANT FIX)
 # =====================================================
-
-if "last_refresh" not in st.session_state:
-    st.session_state.last_refresh = 0
-
-st_autorefresh(interval=REFRESH_SECONDS * 1000, key="auto_refresh")
 
 if time.time() - st.session_state.last_refresh > REFRESH_SECONDS:
     fetch_posts()
@@ -638,18 +623,14 @@ FROM posts
 ORDER BY datetime(fetched_at) DESC
 """, conn)
 
-df.columns = [
-    "Title","Reddit Link","Posted",
-    "Score","Reason","Category","Fetched At"
-]
+df.columns = ["Title","Reddit Link","Posted","Score","Reason","Category","Fetched At"]
 
 df["Posted"] = df["Posted"].apply(format_poland_time)
 df["Fetched At"] = df["Fetched At"].apply(format_poland_time)
 
 # =====================================================
-# UI HEADER
+# UI
 # =====================================================
-st_autorefresh(interval=REFRESH_SECONDS * 1000, key="auto_refresh")
 
 st.title("🔥 AskReddit Engagement Monitor")
 
@@ -657,12 +638,10 @@ last_ref = datetime.fromtimestamp(
     st.session_state.last_refresh
 ).astimezone(POLAND_TZ).strftime("%d/%m/%Y %H:%M:%S")
 
-st.markdown(f"""
-### ⏱ Last refreshed: **{last_ref}**
-""")
+st.markdown(f"### ⏱ Last refreshed: **{last_ref}**")
 
 # =====================================================
-# MANUAL REFRESH BUTTON
+# MANUAL REFRESH
 # =====================================================
 
 if st.button("🔄 Refresh Now"):
@@ -674,7 +653,7 @@ if st.button("🔄 Refresh Now"):
 # TABLES
 # =====================================================
 
-st.subheader("📋 Latest Posts (Newest First)")
+st.subheader("📋 Latest Posts")
 st.dataframe(df, use_container_width=True)
 
 st.subheader("🚀 Top Posts")
@@ -693,7 +672,7 @@ with c1:
     st.metric("Total Posts", len(df))
 
 with c2:
-    st.metric("Average Score",
+    st.metric("Avg Score",
               round(df["Score"].mean(), 1) if len(df) else 0)
 
 with c3:
@@ -704,4 +683,4 @@ with c3:
 # FOOTER
 # =====================================================
 
-st.caption("Auto-refresh every 200 seconds | Reddit AskReddit RSS")
+st.caption("Auto-refresh every 200 seconds | Streamlit Cloud compatible")
