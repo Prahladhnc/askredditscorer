@@ -4,5 +4,5 @@ feedparser
 pandas
 pytz
 numpy
-
-llama-cpp-python==0.2.90
+scikit-learn
+sentence-transformers

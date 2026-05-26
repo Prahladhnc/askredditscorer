@@ -1,370 +1,14 @@
-# import time
-# import sqlite3
-# from datetime import datetime, timedelta
-
-# import feedparser
-# import pandas as pd
-# import pytz
-# import streamlit as st
-
-# import numpy as np
-# from sentence_transformers import SentenceTransformer, util
-
-# # =====================================================
-# # CONFIG
-# # =====================================================
-
-# RSS_URL = "https://www.reddit.com/r/AskReddit/new/.rss"
-# DB_NAME = "reddit_posts.db"
-# REFRESH_SECONDS = 200  # 3 minutes
-
-# POLAND_TZ = pytz.timezone("Europe/Warsaw")
-
-# # =====================================================
-# # STREAMLIT
-# # =====================================================
-
-# st.set_page_config(page_title="AskReddit Monitor", layout="wide")
-
-# # =====================================================
-# # MODEL
-# # =====================================================
-
-# @st.cache_resource
-# def load_model():
-#     return SentenceTransformer("all-MiniLM-L6-v2")
-
-# model = load_model()
-
-# CATEGORIES = [
-#     "Relationships","Confessions","Psychology","Social Issues",
-#     "Ethics","Money","Career","Nostalgia","Controversial",
-#     "Funny","Hypothetical","Fear","Family","Dating",
-#     "Technology","Society","Life Advice","Human Behavior",
-#     "General Discussion"
-# ]
-
-# category_embeddings = model.encode(CATEGORIES, convert_to_tensor=True)
-
-# # =====================================================
-# # DATABASE
-# # =====================================================
-
-# conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-# cursor = conn.cursor()
-
-# cursor.execute("""
-# CREATE TABLE IF NOT EXISTS posts (
-#     post_id TEXT PRIMARY KEY,
-#     title TEXT,
-#     url TEXT,
-#     posted_time TEXT,
-#     engagement_score INTEGER,
-#     reason TEXT,
-#     category TEXT,
-#     fetched_at TEXT
-# )
-# """)
-
-# conn.commit()
-
-# # =====================================================
-# # TIME FORMATTING
-# # =====================================================
-
-# def format_poland_time(ts):
-#     try:
-#         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-#         dt = dt.astimezone(POLAND_TZ)
-#         return dt.strftime("%d/%m/%Y %H:%M:%S")
-#     except:
-#         return ts
-
-# # =====================================================
-# # DB HELPERS
-# # =====================================================
-
-# def post_exists(post_id):
-#     cursor.execute("SELECT 1 FROM posts WHERE post_id=?", (post_id,))
-#     return cursor.fetchone() is not None
-
-
-# def save_post(post_id, title, url, posted_time, score, reason, category):
-#     cursor.execute("""
-#         INSERT OR IGNORE INTO posts VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-#     """, (
-#         post_id,
-#         title,
-#         url,
-#         posted_time,
-#         score,
-#         reason,
-#         category,
-#         datetime.utcnow().isoformat()
-#     ))
-#     conn.commit()
-
-# # =====================================================
-# # SCORING
-# # =====================================================
-
-# def score_title(title):
-#     t = title.lower()
-#     score = 25
-
-#     triggers = [
-#         "would you","what if","have you ever",
-#         "worst","craziest","secret","regret"
-#     ]
-#     score += sum(8 for w in triggers if w in t)
-
-#     emotions = [
-#         "hate","love","cry","kill","cheat","fear"
-#     ]
-#     score += sum(6 for w in emotions if w in t)
-
-#     if "?" in title:
-#         score += 10
-
-#     wc = len(title.split())
-#     if 8 <= wc <= 20:
-#         score += 10
-#     elif wc > 30:
-#         score -= 10
-
-#     return max(1, min(100, score))
-
-# # =====================================================
-# # CATEGORY DETECTION
-# # =====================================================
-
-# def get_category(title):
-#     emb = model.encode(title, convert_to_tensor=True)
-#     sims = util.cos_sim(emb, category_embeddings)[0]
-#     return CATEGORIES[int(np.argmax(sims))]
-
-# # =====================================================
-# # ANALYSIS
-# # =====================================================
-
-# def analyze_titles(titles):
-#     results = []
-
-#     for t in titles:
-#         try:
-#             cat = get_category(t)
-#             sc = score_title(t)
-
-#             reasons = []
-#             text = t.lower()
-
-#             # 1. Engagement hooks
-#             hooks = ["would you", "what if", "have you ever", "imagine", "if you could"]
-#             if any(h in text for h in hooks):
-#                 reasons.append("hypothetical hook")
-
-#             # 2. Emotional triggers
-#             emotions = ["worst", "craziest", "secret", "regret", "trauma", "lost", "cheated"]
-#             if any(e in text for e in emotions):
-#                 reasons.append("emotional trigger")
-
-#             # 3. Controversial / sensitive topics
-#             controversial = ["racist", "illegal", "drugs", "cheat", "money", "politics", "sex"]
-#             if any(c in text for c in controversial):
-#                 reasons.append("controversial topic")
-
-#             # 4. Length quality signal
-#             wc = len(t.split())
-#             if 8 <= wc <= 20:
-#                 reasons.append("ideal length")
-#             elif wc > 30:
-#                 reasons.append("too long (low retention)")
-#             elif wc < 6:
-#                 reasons.append("too short (low clarity)")
-
-#             # 5. Score-based interpretation
-#             if sc >= 75:
-#                 reasons.append("high engagement potential")
-#             elif sc <= 40:
-#                 reasons.append("low engagement potential")
-
-#             results.append({
-#                 "score": sc,
-#                 "category": cat,
-#                 "reason": ", ".join(reasons) if reasons else "neutral"
-#             })
-
-#         except:
-#             results.append({
-#                 "score": 50,
-#                 "category": "General Discussion",
-#                 "reason": "fallback"
-#             })
-
-#     return results
-# # =====================================================
-# # FETCH POSTS
-# # =====================================================
-
-# def fetch_posts():
-#     feed = feedparser.parse(RSS_URL)
-
-#     new_posts = []
-
-#     for e in feed.entries:
-#         try:
-#             url = e.link
-#             post_id = url.split("/comments/")[1].split("/")[0]
-
-#             if post_exists(post_id):
-#                 continue
-
-#             new_posts.append({
-#                 "id": post_id,
-#                 "title": e.title,
-#                 "url": url,
-#                 "time": e.published
-#             })
-#         except:
-#             pass
-
-#     BATCH = 5
-
-#     for i in range(0, len(new_posts), BATCH):
-#         batch = new_posts[i:i+BATCH]
-#         titles = [x["title"] for x in batch]
-
-#         results = analyze_titles(titles)
-
-#         for item, res in zip(batch, results):
-#             save_post(
-#                 item["id"],
-#                 item["title"],
-#                 item["url"],
-#                 item["time"],
-#                 res["score"],
-#                 res["reason"],
-#                 res["category"]
-#             )
-
-# def time_ago(seconds):
-#     if seconds < 60:
-#         return f"{int(seconds)} seconds ago"
-#     elif seconds < 3600:
-#         return f"{int(seconds // 60)} minutes ago"
-#     else:
-#         return f"{int(seconds // 3600)} hours ago"
-
-# # =====================================================
-# # INIT
-# # =====================================================
-
-# cursor.execute("SELECT COUNT(*) FROM posts")
-# if cursor.fetchone()[0] == 0:
-#     fetch_posts()
-
-# # =====================================================
-# # AUTO REFRESH (STREAMLIT SAFE)
-# # =====================================================
-
-# if "last_refresh" not in st.session_state:
-#     st.session_state.last_refresh = time.time()
-
-# # Auto refresh every 5 minutes
-# if time.time() - st.session_state.last_refresh > REFRESH_SECONDS:
-#     fetch_posts()
-#     st.session_state.last_refresh = time.time()
-#     st.rerun()
-
-# # =====================================================
-# # LOAD DATA (ALWAYS FRESH)
-# # =====================================================
-
-# df = pd.read_sql_query("""
-# SELECT title, url, posted_time,
-#        engagement_score, reason, category, fetched_at
-# FROM posts
-# ORDER BY datetime(fetched_at) DESC
-# """, conn)
-
-# df.columns = [
-#     "Title","Reddit Link","Posted",
-#     "Score","Reason","Category","Fetched At"
-# ]
-
-# # convert timestamps to Poland time
-# df["Posted"] = df["Posted"].apply(format_poland_time)
-# df["Fetched At"] = df["Fetched At"].apply(format_poland_time)
-
-# # =====================================================
-# # UI
-# # =====================================================
-
-# st.title("🔥 AskReddit Engagement Monitor")
-# now = time.time()
-# elapsed = now - st.session_state.last_refresh
-
-# last_updated = datetime.fromtimestamp(
-#     st.session_state.last_refresh
-# ).astimezone(POLAND_TZ).strftime("%d/%m/%Y %H:%M:%S")
-
-# st.markdown(
-#     f"""
-# ### ⏱ Feed Status
-# - 🟢 Last updated: **{last_updated}**
-# """
-# )
-# st.subheader("📋 Latest Posts (Newest First)")
-# st.dataframe(df, use_container_width=True)
-
-# st.subheader("🚀 Top Posts")
-# st.dataframe(df.sort_values("Score", ascending=False).head(10),
-#              use_container_width=True)
-
-# # =====================================================
-# # STATS
-# # =====================================================
-
-# st.subheader("📊 Stats")
-
-# col1, col2, col3 = st.columns(3)
-
-# with col1:
-#     st.metric("Total Posts", len(df))
-
-# with col2:
-#     st.metric("Average Score",
-#               round(df["Score"].mean(), 1) if len(df) else 0)
-
-# with col3:
-#     st.metric("Max Score",
-#               df["Score"].max() if len(df) else 0)
-
-# # =====================================================
-# # REFRESH BUTTON (OPTIONAL MANUAL)
-# # =====================================================
-
-# if st.button("🔄 Refresh Now"):
-#     fetch_posts()
-#     st.rerun()
-
-# # =====================================================
-# # FOOTER
-# # =====================================================
-
-# st.caption("Source: Reddit AskReddit RSS Feed")
-
 import time
-import os
 import sqlite3
-import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import feedparser
 import pandas as pd
 import pytz
 import streamlit as st
-from llama_cpp import Llama
+
+import numpy as np
+from sentence_transformers import SentenceTransformer, util
 
 # =====================================================
 # CONFIG
@@ -372,10 +16,7 @@ from llama_cpp import Llama
 
 RSS_URL = "https://www.reddit.com/r/AskReddit/new/.rss"
 DB_NAME = "reddit_posts.db"
-REFRESH_SECONDS = 300
-
-MODEL_URL = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
-MODEL_PATH = "model.gguf"
+REFRESH_SECONDS = 200  # 3 minutes
 
 POLAND_TZ = pytz.timezone("Europe/Warsaw")
 
@@ -383,38 +24,27 @@ POLAND_TZ = pytz.timezone("Europe/Warsaw")
 # STREAMLIT
 # =====================================================
 
-st.set_page_config(page_title="AskReddit GGUF Scorer", layout="wide")
+st.set_page_config(page_title="AskReddit Monitor", layout="wide")
 
 # =====================================================
-# MODEL DOWNLOAD
-# =====================================================
-
-@st.cache_resource
-def ensure_model():
-    if not os.path.exists(MODEL_PATH):
-        st.info("📥 Downloading GGUF model (first run only, ~500MB)...")
-        urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
-        st.success("✅ Model downloaded!")
-    return MODEL_PATH
-
-# =====================================================
-# LLM LOAD (CACHE)
+# MODEL
 # =====================================================
 
 @st.cache_resource
-def load_llm():
-    path = ensure_model()
+def load_model():
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
-    llm = Llama(
-        model_path=path,
-        n_ctx=1024,
-        n_threads=2,
-        n_batch=128,
-        verbose=False
-    )
-    return llm
+model = load_model()
 
-llm = load_llm()
+CATEGORIES = [
+    "Relationships","Confessions","Psychology","Social Issues",
+    "Ethics","Money","Career","Nostalgia","Controversial",
+    "Funny","Hypothetical","Fear","Family","Dating",
+    "Technology","Society","Life Advice","Human Behavior",
+    "General Discussion"
+]
+
+category_embeddings = model.encode(CATEGORIES, convert_to_tensor=True)
 
 # =====================================================
 # DATABASE
@@ -429,7 +59,7 @@ CREATE TABLE IF NOT EXISTS posts (
     title TEXT,
     url TEXT,
     posted_time TEXT,
-    score INTEGER,
+    engagement_score INTEGER,
     reason TEXT,
     category TEXT,
     fetched_at TEXT
@@ -439,26 +69,10 @@ CREATE TABLE IF NOT EXISTS posts (
 conn.commit()
 
 # =====================================================
-# HELPERS
+# TIME FORMATTING
 # =====================================================
 
-def post_exists(post_id):
-    cursor.execute("SELECT 1 FROM posts WHERE post_id=?", (post_id,))
-    return cursor.fetchone() is not None
-
-
-def save_post(pid, title, url, posted_time, score, reason, category):
-    cursor.execute("""
-        INSERT OR IGNORE INTO posts VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        pid, title, url, posted_time,
-        score, reason, category,
-        datetime.utcnow().isoformat()
-    ))
-    conn.commit()
-
-
-def format_poland(ts):
+def format_poland_time(ts):
     try:
         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
         dt = dt.astimezone(POLAND_TZ)
@@ -467,59 +81,132 @@ def format_poland(ts):
         return ts
 
 # =====================================================
-# LLM SCORING
+# DB HELPERS
+# =====================================================
+
+def post_exists(post_id):
+    cursor.execute("SELECT 1 FROM posts WHERE post_id=?", (post_id,))
+    return cursor.fetchone() is not None
+
+
+def save_post(post_id, title, url, posted_time, score, reason, category):
+    cursor.execute("""
+        INSERT OR IGNORE INTO posts VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        post_id,
+        title,
+        url,
+        posted_time,
+        score,
+        reason,
+        category,
+        datetime.utcnow().isoformat()
+    ))
+    conn.commit()
+
+# =====================================================
+# SCORING
 # =====================================================
 
 def score_title(title):
+    t = title.lower()
+    score = 25
 
-    prompt = f"""
-You are a Reddit engagement prediction system.
+    triggers = [
+        "would you","what if","have you ever",
+        "worst","craziest","secret","regret"
+    ]
+    score += sum(8 for w in triggers if w in t)
 
-Score this AskReddit title from 1 to 100.
+    emotions = [
+        "hate","love","cry","kill","cheat","fear"
+    ]
+    score += sum(6 for w in emotions if w in t)
 
-Rules:
-- High scores (80+) are rare
-- Focus on curiosity, emotion, controversy, relatability
+    if "?" in title:
+        score += 10
 
-Return ONLY JSON:
+    wc = len(title.split())
+    if 8 <= wc <= 20:
+        score += 10
+    elif wc > 30:
+        score -= 10
 
-{{
-  "score": 0-100,
-  "category": "Relationships, Confessions, Psychology, Social Issues, Ethics, Money, Career, Nostalgia, Controversial, Funny, Hypothetical, Fear, Family, Dating, Technology, Society, Life Advice, Human Behavior, General Discussion",
-  "reason": "max 15 words"
-}}
+    return max(1, min(100, score))
 
-Title:
-{title}
+# =====================================================
+# CATEGORY DETECTION
+# =====================================================
 
-JSON:
-"""
+def get_category(title):
+    emb = model.encode(title, convert_to_tensor=True)
+    sims = util.cos_sim(emb, category_embeddings)[0]
+    return CATEGORIES[int(np.argmax(sims))]
 
-    output = llm(
-        prompt,
-        max_tokens=120,
-        temperature=0.3,
-        stop=["</s>"]
-    )
+# =====================================================
+# ANALYSIS
+# =====================================================
 
-    text = output["choices"][0]["text"]
+def analyze_titles(titles):
+    results = []
 
-    try:
-        json_str = text[text.index("{"):text.rindex("}")+1]
-        return eval(json_str)  # safe enough for controlled output
-    except:
-        return {
-            "score": 50,
-            "category": "General Discussion",
-            "reason": "fallback"
-        }
+    for t in titles:
+        try:
+            cat = get_category(t)
+            sc = score_title(t)
 
+            reasons = []
+            text = t.lower()
+
+            # 1. Engagement hooks
+            hooks = ["would you", "what if", "have you ever", "imagine", "if you could"]
+            if any(h in text for h in hooks):
+                reasons.append("hypothetical hook")
+
+            # 2. Emotional triggers
+            emotions = ["worst", "craziest", "secret", "regret", "trauma", "lost", "cheated"]
+            if any(e in text for e in emotions):
+                reasons.append("emotional trigger")
+
+            # 3. Controversial / sensitive topics
+            controversial = ["racist", "illegal", "drugs", "cheat", "money", "politics", "sex"]
+            if any(c in text for c in controversial):
+                reasons.append("controversial topic")
+
+            # 4. Length quality signal
+            wc = len(t.split())
+            if 8 <= wc <= 20:
+                reasons.append("ideal length")
+            elif wc > 30:
+                reasons.append("too long (low retention)")
+            elif wc < 6:
+                reasons.append("too short (low clarity)")
+
+            # 5. Score-based interpretation
+            if sc >= 75:
+                reasons.append("high engagement potential")
+            elif sc <= 40:
+                reasons.append("low engagement potential")
+
+            results.append({
+                "score": sc,
+                "category": cat,
+                "reason": ", ".join(reasons) if reasons else "neutral"
+            })
+
+        except:
+            results.append({
+                "score": 50,
+                "category": "General Discussion",
+                "reason": "fallback"
+            })
+
+    return results
 # =====================================================
 # FETCH POSTS
 # =====================================================
 
 def fetch_posts():
-
     feed = feedparser.parse(RSS_URL)
 
     new_posts = []
@@ -538,29 +225,38 @@ def fetch_posts():
                 "url": url,
                 "time": e.published
             })
-
         except:
-            continue
+            pass
 
-    for p in new_posts:
+    BATCH = 5
 
-        analysis = score_title(p["title"])
+    for i in range(0, len(new_posts), BATCH):
+        batch = new_posts[i:i+BATCH]
+        titles = [x["title"] for x in batch]
 
-        score = int(analysis.get("score", 50))
-        score = max(1, min(100, score))
+        results = analyze_titles(titles)
 
-        save_post(
-            p["id"],
-            p["title"],
-            p["url"],
-            p["time"],
-            score,
-            analysis.get("reason", ""),
-            analysis.get("category", "General Discussion")
-        )
+        for item, res in zip(batch, results):
+            save_post(
+                item["id"],
+                item["title"],
+                item["url"],
+                item["time"],
+                res["score"],
+                res["reason"],
+                res["category"]
+            )
+
+def time_ago(seconds):
+    if seconds < 60:
+        return f"{int(seconds)} seconds ago"
+    elif seconds < 3600:
+        return f"{int(seconds // 60)} minutes ago"
+    else:
+        return f"{int(seconds // 3600)} hours ago"
 
 # =====================================================
-# INIT DB
+# INIT
 # =====================================================
 
 cursor.execute("SELECT COUNT(*) FROM posts")
@@ -568,44 +264,57 @@ if cursor.fetchone()[0] == 0:
     fetch_posts()
 
 # =====================================================
-# AUTO REFRESH
+# AUTO REFRESH (STREAMLIT SAFE)
 # =====================================================
 
 if "last_refresh" not in st.session_state:
     st.session_state.last_refresh = time.time()
 
+# Auto refresh every 5 minutes
 if time.time() - st.session_state.last_refresh > REFRESH_SECONDS:
-    st.session_state.last_refresh = time.time()
     fetch_posts()
+    st.session_state.last_refresh = time.time()
     st.rerun()
 
 # =====================================================
-# LOAD DATA
+# LOAD DATA (ALWAYS FRESH)
 # =====================================================
 
 df = pd.read_sql_query("""
-SELECT title, url, posted_time, score, reason, category, fetched_at
+SELECT title, url, posted_time,
+       engagement_score, reason, category, fetched_at
 FROM posts
 ORDER BY datetime(fetched_at) DESC
 """, conn)
 
 df.columns = [
-    "Title", "Reddit Link", "Posted",
-    "Score", "Reason", "Category", "Fetched At"
+    "Title","Reddit Link","Posted",
+    "Score","Reason","Category","Fetched At"
 ]
 
-df["Posted"] = df["Posted"].apply(format_poland)
-df["Fetched At"] = df["Fetched At"].apply(format_poland)
+# convert timestamps to Poland time
+df["Posted"] = df["Posted"].apply(format_poland_time)
+df["Fetched At"] = df["Fetched At"].apply(format_poland_time)
 
 # =====================================================
 # UI
 # =====================================================
 
-st.title("🔥 AskReddit GGUF LLM Scorer")
+st.title("🔥 AskReddit Engagement Monitor")
+now = time.time()
+elapsed = now - st.session_state.last_refresh
 
-st.caption(f"Auto refresh every {REFRESH_SECONDS//60} minutes")
+last_updated = datetime.fromtimestamp(
+    st.session_state.last_refresh
+).astimezone(POLAND_TZ).strftime("%d/%m/%Y %H:%M:%S")
 
-st.subheader("📋 Latest Posts")
+st.markdown(
+    f"""
+### ⏱ Feed Status
+- 🟢 Last updated: **{last_updated}**
+"""
+)
+st.subheader("📋 Latest Posts (Newest First)")
 st.dataframe(df, use_container_width=True)
 
 st.subheader("🚀 Top Posts")
@@ -618,19 +327,21 @@ st.dataframe(df.sort_values("Score", ascending=False).head(10),
 
 st.subheader("📊 Stats")
 
-c1, c2, c3 = st.columns(3)
+col1, col2, col3 = st.columns(3)
 
-with c1:
+with col1:
     st.metric("Total Posts", len(df))
 
-with c2:
-    st.metric("Avg Score", round(df["Score"].mean(), 1) if len(df) else 0)
+with col2:
+    st.metric("Average Score",
+              round(df["Score"].mean(), 1) if len(df) else 0)
 
-with c3:
-    st.metric("Max Score", df["Score"].max() if len(df) else 0)
+with col3:
+    st.metric("Max Score",
+              df["Score"].max() if len(df) else 0)
 
 # =====================================================
-# MANUAL REFRESH
+# REFRESH BUTTON (OPTIONAL MANUAL)
 # =====================================================
 
 if st.button("🔄 Refresh Now"):
@@ -641,4 +352,4 @@ if st.button("🔄 Refresh Now"):
 # FOOTER
 # =====================================================
 
-st.caption("Powered by Qwen GGUF (llama.cpp, no APIs)")
+st.caption("Source: Reddit AskReddit RSS Feed")
