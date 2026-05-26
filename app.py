@@ -221,6 +221,14 @@ def fetch_posts():
                 res["category"]
             )
 
+def time_ago(seconds):
+    if seconds < 60:
+        return f"{int(seconds)} seconds ago"
+    elif seconds < 3600:
+        return f"{int(seconds // 60)} minutes ago"
+    else:
+        return f"{int(seconds // 3600)} hours ago"
+
 # =====================================================
 # INIT
 # =====================================================
@@ -236,9 +244,10 @@ if cursor.fetchone()[0] == 0:
 if "last_refresh" not in st.session_state:
     st.session_state.last_refresh = time.time()
 
+# Auto refresh every 5 minutes
 if time.time() - st.session_state.last_refresh > REFRESH_SECONDS:
-    st.session_state.last_refresh = time.time()
     fetch_posts()
+    st.session_state.last_refresh = time.time()
     st.rerun()
 
 # =====================================================
@@ -266,7 +275,20 @@ df["Fetched At"] = df["Fetched At"].apply(format_poland_time)
 # =====================================================
 
 st.title("🔥 AskReddit Engagement Monitor")
+now = time.time()
+elapsed = now - st.session_state.last_refresh
 
+last_updated = datetime.fromtimestamp(
+    st.session_state.last_refresh
+).astimezone(POLAND_TZ).strftime("%d/%m/%Y %H:%M:%S")
+
+st.markdown(
+    f"""
+### ⏱ Feed Status
+- 🟢 Last updated: **{last_updated}**
+- ⏳ Updated: **{time_ago(elapsed)}**
+"""
+)
 st.subheader("📋 Latest Posts (Newest First)")
 st.dataframe(df, use_container_width=True)
 
