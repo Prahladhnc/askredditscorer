@@ -364,7 +364,13 @@ import streamlit as st
 
 import torch
 import json
-from transformers import AutoTokenizer, AutoModelForCausalLM
+import transformers
+print(transformers.__version__)
+st.write(transformers.__version__)
+
+from transformers import AutoTokenizer
+from transformers import AutoModelForCausalLM
+
 
 # =====================================================
 # CONFIG
