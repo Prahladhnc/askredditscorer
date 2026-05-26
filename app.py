@@ -155,16 +155,43 @@ def analyze_titles(titles):
             cat = get_category(t)
             sc = score_title(t)
 
-            reason = []
-            if "?" in t:
-                reason.append("question format")
-            if sc > 70:
-                reason.append("high engagement")
+            reasons = []
+            text = t.lower()
+
+            # 1. Engagement hooks
+            hooks = ["would you", "what if", "have you ever", "imagine", "if you could"]
+            if any(h in text for h in hooks):
+                reasons.append("hypothetical hook")
+
+            # 2. Emotional triggers
+            emotions = ["worst", "craziest", "secret", "regret", "trauma", "lost", "cheated"]
+            if any(e in text for e in emotions):
+                reasons.append("emotional trigger")
+
+            # 3. Controversial / sensitive topics
+            controversial = ["racist", "illegal", "drugs", "cheat", "money", "politics", "sex"]
+            if any(c in text for c in controversial):
+                reasons.append("controversial topic")
+
+            # 4. Length quality signal
+            wc = len(t.split())
+            if 8 <= wc <= 20:
+                reasons.append("ideal length")
+            elif wc > 30:
+                reasons.append("too long (low retention)")
+            elif wc < 6:
+                reasons.append("too short (low clarity)")
+
+            # 5. Score-based interpretation
+            if sc >= 75:
+                reasons.append("high engagement potential")
+            elif sc <= 40:
+                reasons.append("low engagement potential")
 
             results.append({
                 "score": sc,
                 "category": cat,
-                "reason": ", ".join(reason) or "neutral"
+                "reason": ", ".join(reasons) if reasons else "neutral"
             })
 
         except:
@@ -175,7 +202,6 @@ def analyze_titles(titles):
             })
 
     return results
-
 # =====================================================
 # FETCH POSTS
 # =====================================================
