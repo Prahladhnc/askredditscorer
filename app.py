@@ -286,7 +286,6 @@ st.markdown(
     f"""
 ### ⏱ Feed Status
 - 🟢 Last updated: **{last_updated}**
-- ⏳ Updated: **{time_ago(elapsed)}**
 """
 )
 st.subheader("📋 Latest Posts (Newest First)")
