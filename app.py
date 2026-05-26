@@ -372,7 +372,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 RSS_URL = "https://www.reddit.com/r/AskReddit/new/.rss"
 DB_NAME = "reddit_posts.db"
-REFRESH_SECONDS = 300
+REFRESH_SECONDS = 180
 
 POLAND_TZ = pytz.timezone("Europe/Warsaw")
 
