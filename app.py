@@ -618,10 +618,14 @@ if cursor.fetchone()[0] == 0:
 # AUTO REFRESH LOGIC
 # =====================================================
 
+if "last_refresh" not in st.session_state:
+    st.session_state.last_refresh = 0
+
+st_autorefresh(interval=REFRESH_SECONDS * 1000, key="auto_refresh")
+
 if time.time() - st.session_state.last_refresh > REFRESH_SECONDS:
     fetch_posts()
     st.session_state.last_refresh = time.time()
-    st.rerun()
 
 # =====================================================
 # LOAD DATA
