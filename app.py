@@ -382,7 +382,7 @@ REFRESH_SECONDS = 180
 
 POLAND_TZ = pytz.timezone("Europe/Warsaw")
 
-MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
+MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 
 # =====================================================
 # STREAMLIT SETUP
@@ -640,4 +640,4 @@ if st.button("🔄 Refresh Now"):
 # FOOTER
 # =====================================================
 
-st.caption("Powered by Qwen2.5-1.5B-Instruct + Reddit RSS")
+st.caption("Powered by Qwen2.5-0.5B-Instruct + Reddit RSS")
