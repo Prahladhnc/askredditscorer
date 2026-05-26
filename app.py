@@ -353,24 +353,18 @@
 # # =====================================================
 
 # st.caption("Source: Reddit AskReddit RSS Feed")
+
 import time
+import os
 import sqlite3
+import urllib.request
 from datetime import datetime
 
 import feedparser
 import pandas as pd
 import pytz
 import streamlit as st
-
-import torch
-import json
-import transformers
-print(transformers.__version__)
-st.write(transformers.__version__)
-
-from transformers import AutoTokenizer
-from transformers import AutoModelForCausalLM
-
+from llama_cpp import Llama
 
 # =====================================================
 # CONFIG
@@ -378,32 +372,49 @@ from transformers import AutoModelForCausalLM
 
 RSS_URL = "https://www.reddit.com/r/AskReddit/new/.rss"
 DB_NAME = "reddit_posts.db"
-REFRESH_SECONDS = 180
+REFRESH_SECONDS = 300
+
+MODEL_URL = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+MODEL_PATH = "model.gguf"
 
 POLAND_TZ = pytz.timezone("Europe/Warsaw")
 
-MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
-
 # =====================================================
-# STREAMLIT SETUP
+# STREAMLIT
 # =====================================================
 
-st.set_page_config(page_title="AskReddit LLM Monitor", layout="wide")
+st.set_page_config(page_title="AskReddit GGUF Scorer", layout="wide")
 
 # =====================================================
-# LOAD MODEL (CACHED - VERY IMPORTANT)
+# MODEL DOWNLOAD
+# =====================================================
+
+@st.cache_resource
+def ensure_model():
+    if not os.path.exists(MODEL_PATH):
+        st.info("📥 Downloading GGUF model (first run only, ~500MB)...")
+        urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+        st.success("✅ Model downloaded!")
+    return MODEL_PATH
+
+# =====================================================
+# LLM LOAD (CACHE)
 # =====================================================
 
 @st.cache_resource
 def load_llm():
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        torch_dtype=torch.float32
-    )
-    return tokenizer, model
+    path = ensure_model()
 
-tokenizer, model = load_llm()
+    llm = Llama(
+        model_path=path,
+        n_ctx=1024,
+        n_threads=2,
+        n_batch=128,
+        verbose=False
+    )
+    return llm
+
+llm = load_llm()
 
 # =====================================================
 # DATABASE
@@ -418,7 +429,7 @@ CREATE TABLE IF NOT EXISTS posts (
     title TEXT,
     url TEXT,
     posted_time TEXT,
-    engagement_score INTEGER,
+    score INTEGER,
     reason TEXT,
     category TEXT,
     fetched_at TEXT
@@ -436,23 +447,18 @@ def post_exists(post_id):
     return cursor.fetchone() is not None
 
 
-def save_post(post_id, title, url, posted_time, score, reason, category):
+def save_post(pid, title, url, posted_time, score, reason, category):
     cursor.execute("""
         INSERT OR IGNORE INTO posts VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        post_id,
-        title,
-        url,
-        posted_time,
-        score,
-        reason,
-        category,
+        pid, title, url, posted_time,
+        score, reason, category,
         datetime.utcnow().isoformat()
     ))
     conn.commit()
 
 
-def format_poland_time(ts):
+def format_poland(ts):
     try:
         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
         dt = dt.astimezone(POLAND_TZ)
@@ -461,57 +467,51 @@ def format_poland_time(ts):
         return ts
 
 # =====================================================
-# LLM PROMPT
+# LLM SCORING
 # =====================================================
 
-def build_prompt(title):
-    return f"""
-You are a strict Reddit engagement evaluator.
+def score_title(title):
 
-Score how engaging this AskReddit post will be (1-100).
+    prompt = f"""
+You are a Reddit engagement prediction system.
 
-Be critical:
-- High scores (80+) must be rare
-- Consider curiosity, emotion, controversy, relatability, storytelling
+Score this AskReddit title from 1 to 100.
 
-Return ONLY valid JSON:
+Rules:
+- High scores (80+) are rare
+- Focus on curiosity, emotion, controversy, relatability
+
+Return ONLY JSON:
 
 {{
-  "score": number,
-  "category": "one of: Relationships, Confessions, Psychology, Social Issues, Ethics, Money, Career, Nostalgia, Controversial, Funny, Hypothetical, Fear, Family, Dating, Technology, Society, Life Advice, Human Behavior, General Discussion",
+  "score": 0-100,
+  "category": "Relationships, Confessions, Psychology, Social Issues, Ethics, Money, Career, Nostalgia, Controversial, Funny, Hypothetical, Fear, Family, Dating, Technology, Society, Life Advice, Human Behavior, General Discussion",
   "reason": "max 15 words"
 }}
 
 Title:
 {title}
+
+JSON:
 """
 
-# =====================================================
-# LLM SCORING FUNCTION
-# =====================================================
+    output = llm(
+        prompt,
+        max_tokens=120,
+        temperature=0.3,
+        stop=["</s>"]
+    )
 
-def llm_score(title):
-    prompt = build_prompt(title)
-
-    inputs = tokenizer(prompt, return_tensors="pt")
-
-    with torch.no_grad():
-        output = model.generate(
-            **inputs,
-            max_new_tokens=120,
-            temperature=0.3
-        )
-
-    text = tokenizer.decode(output[0], skip_special_tokens=True)
+    text = output["choices"][0]["text"]
 
     try:
         json_str = text[text.index("{"):text.rindex("}")+1]
-        return json.loads(json_str)
+        return eval(json_str)  # safe enough for controlled output
     except:
         return {
             "score": 50,
             "category": "General Discussion",
-            "reason": "parse fallback"
+            "reason": "fallback"
         }
 
 # =====================================================
@@ -519,6 +519,7 @@ def llm_score(title):
 # =====================================================
 
 def fetch_posts():
+
     feed = feedparser.parse(RSS_URL)
 
     new_posts = []
@@ -537,28 +538,29 @@ def fetch_posts():
                 "url": url,
                 "time": e.published
             })
+
         except:
-            pass
+            continue
 
-    for post in new_posts:
+    for p in new_posts:
 
-        analysis = llm_score(post["title"])
+        analysis = score_title(p["title"])
 
         score = int(analysis.get("score", 50))
         score = max(1, min(100, score))
 
         save_post(
-            post["id"],
-            post["title"],
-            post["url"],
-            post["time"],
+            p["id"],
+            p["title"],
+            p["url"],
+            p["time"],
             score,
-            analysis.get("reason", "none"),
+            analysis.get("reason", ""),
             analysis.get("category", "General Discussion")
         )
 
 # =====================================================
-# INIT
+# INIT DB
 # =====================================================
 
 cursor.execute("SELECT COUNT(*) FROM posts")
@@ -566,7 +568,7 @@ if cursor.fetchone()[0] == 0:
     fetch_posts()
 
 # =====================================================
-# AUTO REFRESH (SAFE)
+# AUTO REFRESH
 # =====================================================
 
 if "last_refresh" not in st.session_state:
@@ -582,8 +584,7 @@ if time.time() - st.session_state.last_refresh > REFRESH_SECONDS:
 # =====================================================
 
 df = pd.read_sql_query("""
-SELECT title, url, posted_time,
-       engagement_score, reason, category, fetched_at
+SELECT title, url, posted_time, score, reason, category, fetched_at
 FROM posts
 ORDER BY datetime(fetched_at) DESC
 """, conn)
@@ -593,16 +594,18 @@ df.columns = [
     "Score", "Reason", "Category", "Fetched At"
 ]
 
-df["Posted"] = df["Posted"].apply(format_poland_time)
-df["Fetched At"] = df["Fetched At"].apply(format_poland_time)
+df["Posted"] = df["Posted"].apply(format_poland)
+df["Fetched At"] = df["Fetched At"].apply(format_poland)
 
 # =====================================================
 # UI
 # =====================================================
 
-st.title("🔥 AskReddit LLM Engagement Monitor (Qwen 1.5B)")
+st.title("🔥 AskReddit GGUF LLM Scorer")
 
-st.subheader("📋 Latest Posts (Newest First)")
+st.caption(f"Auto refresh every {REFRESH_SECONDS//60} minutes")
+
+st.subheader("📋 Latest Posts")
 st.dataframe(df, use_container_width=True)
 
 st.subheader("🚀 Top Posts")
@@ -615,18 +618,16 @@ st.dataframe(df.sort_values("Score", ascending=False).head(10),
 
 st.subheader("📊 Stats")
 
-col1, col2, col3 = st.columns(3)
+c1, c2, c3 = st.columns(3)
 
-with col1:
+with c1:
     st.metric("Total Posts", len(df))
 
-with col2:
-    st.metric("Average Score",
-              round(df["Score"].mean(), 1) if len(df) else 0)
+with c2:
+    st.metric("Avg Score", round(df["Score"].mean(), 1) if len(df) else 0)
 
-with col3:
-    st.metric("Max Score",
-              df["Score"].max() if len(df) else 0)
+with c3:
+    st.metric("Max Score", df["Score"].max() if len(df) else 0)
 
 # =====================================================
 # MANUAL REFRESH
@@ -640,4 +641,4 @@ if st.button("🔄 Refresh Now"):
 # FOOTER
 # =====================================================
 
-st.caption("Powered by Qwen2.5-0.5B-Instruct + Reddit RSS")
+st.caption("Powered by Qwen GGUF (llama.cpp, no APIs)")

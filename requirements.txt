@@ -1,14 +1,8 @@
-streamlit==1.32.0
+streamlit==1.57.0
 
 feedparser
 pandas
 pytz
 numpy
 
-torch --index-url https://download.pytorch.org/whl/cpu
-
-transformers==4.41.1
-tokenizers==0.19.1
-accelerate==0.33.0
-safetensors
-sentencepiece
+llama-cpp-python==0.2.90
